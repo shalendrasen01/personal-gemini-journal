@@ -14,6 +14,7 @@ import {
   onSnapshot,
 } from 'firebase/firestore';
 import { db } from '../lib/firebase';
+import { decryptJournalEntries } from '../lib/encryption';
 import type { UserProfile, JournalInteraction, EntryLocation } from '../types';
 import {
   MapPin,
@@ -100,7 +101,7 @@ export const JournalMapView: React.FC<JournalMapViewProps> = ({
 
     const unsubscribe = onSnapshot(
       q,
-      (snapshot) => {
+      async (snapshot) => {
         const fetched: JournalInteraction[] = [];
         snapshot.forEach((docSnap) => {
           const data = docSnap.data() as any;
@@ -109,11 +110,19 @@ export const JournalMapView: React.FC<JournalMapViewProps> = ({
             ...data,
           } as JournalInteraction);
         });
-        setEntries(fetched);
+
+        let resolvedEntries = fetched;
+        try {
+          resolvedEntries = await decryptJournalEntries(fetched, user);
+        } catch (decryptErr) {
+          console.warn('Journal map decryption warning:', decryptErr);
+        }
+
+        setEntries(resolvedEntries);
         setIsLoading(false);
 
         // Auto-center on latest geotagged entry if available
-        const latestWithLoc = fetched.find((e) => e.location?.latitude && e.location?.longitude);
+        const latestWithLoc = resolvedEntries.find((e) => e.location?.latitude && e.location?.longitude);
         if (latestWithLoc && latestWithLoc.location) {
           setMapCenter({
             lat: latestWithLoc.location.latitude,

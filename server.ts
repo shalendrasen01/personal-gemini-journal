@@ -19,6 +19,7 @@ app.use(express.urlencoded({ extended: true }));
 
 // Load configuration details securely from applet config if present
 let projectId = process.env.FIREBASE_PROJECT_ID || "gen-lang-client-0534033534";
+let firestoreDatabaseId: string | undefined = process.env.FIRESTORE_DATABASE_ID || "ai-studio-personalgeminijo-60edda60-14af-45fe-929d-95d845240aaf";
 try {
   const configPath = path.resolve(process.cwd(), "firebase-applet-config.json");
   if (fs.existsSync(configPath)) {
@@ -26,6 +27,9 @@ try {
     const parsed = JSON.parse(raw);
     if (parsed.projectId) {
       projectId = parsed.projectId;
+    }
+    if (parsed.firestoreDatabaseId) {
+      firestoreDatabaseId = parsed.firestoreDatabaseId;
     }
   }
 } catch (e) {
@@ -39,7 +43,7 @@ if (!getApps().length) {
     adminApp = initializeApp({
       projectId,
     });
-    console.log(`Firebase Admin initialized with project ID: ${projectId}`);
+    console.log(`Firebase Admin initialized with project ID: ${projectId}, database: ${firestoreDatabaseId || "(default)"}`);
   } catch (error) {
     console.error("Firebase Admin initialization warning:", error);
   }
@@ -437,6 +441,9 @@ Extract durable memories (JSON array):`;
 // ---------------- SEMANTIC SEARCH & RETRIEVAL SYSTEM ----------------
 
 function getAdminDb() {
+  if (firestoreDatabaseId) {
+    return getAdminFirestore(adminApp, firestoreDatabaseId);
+  }
   return getAdminFirestore(adminApp);
 }
 
@@ -636,7 +643,16 @@ function extractRelevantExcerpt(fullText: string, queryStr: string): string {
 async function semanticSearchUserEntries(
   userId: string,
   queryText: string,
-  topK: number = 8
+  topK: number = 8,
+  providedEntries?: Array<{
+    id?: string;
+    title?: string;
+    prompt?: string;
+    response?: string;
+    createdAt?: number;
+    mode?: string;
+    embedding?: number[];
+  }>
 ): Promise<Array<{
   id: string;
   title: string;
@@ -649,12 +665,42 @@ async function semanticSearchUserEntries(
 }>> {
   if (!userId || !queryText.trim()) return [];
 
-  const adminDb = getAdminDb();
-  // Query strictly isolated to the authenticated user's subcollection
-  const interactionsRef = adminDb.collection("users").doc(userId).collection("interactions");
-  const snapshot = await interactionsRef.orderBy("createdAt", "desc").limit(60).get();
+  let candidateDocs: Array<{
+    id: string;
+    data: () => any;
+    ref?: any;
+  }> = [];
 
-  if (snapshot.empty) {
+  if (Array.isArray(providedEntries) && providedEntries.length > 0) {
+    candidateDocs = providedEntries.slice(0, 60).map((e, idx) => ({
+      id: typeof e.id === "string" ? e.id : `entry_${idx}`,
+      data: () => ({
+        title: typeof e.title === "string" ? e.title : "Untitled Reflection",
+        prompt: typeof e.prompt === "string" ? e.prompt : "",
+        response: typeof e.response === "string" ? e.response : "",
+        createdAt: typeof e.createdAt === "number" ? e.createdAt : Date.now(),
+        mode: typeof e.mode === "string" ? e.mode : "reflection",
+        embedding: Array.isArray(e.embedding) ? e.embedding : undefined,
+      }),
+    }));
+  } else {
+    try {
+      const adminDb = getAdminDb();
+      const interactionsRef = adminDb.collection("users").doc(userId).collection("interactions");
+      const snapshot = await interactionsRef.orderBy("createdAt", "desc").limit(60).get();
+      if (!snapshot.empty) {
+        candidateDocs = snapshot.docs.map((d) => ({
+          id: d.id,
+          data: () => d.data(),
+          ref: d.ref,
+        }));
+      }
+    } catch (err: any) {
+      console.warn("Notice: Firestore direct query fallback in semanticSearchUserEntries:", err?.message || err);
+    }
+  }
+
+  if (candidateDocs.length === 0) {
     return [];
   }
 
@@ -672,7 +718,7 @@ async function semanticSearchUserEntries(
     fullResponse: string;
   }> = [];
 
-  for (const docSnap of snapshot.docs) {
+  for (const docSnap of candidateDocs) {
     const data = docSnap.data();
     const title = typeof data.title === "string" ? data.title : "Untitled Reflection";
     const prompt = typeof data.prompt === "string" ? data.prompt : "";
@@ -690,8 +736,9 @@ async function semanticSearchUserEntries(
         const generated = await getEmbedding(combinedText);
         if (generated) {
           cachedEmbedding = generated;
-          // Asynchronously update document with embedding for future instant queries
-          docSnap.ref.update({ embedding: generated }).catch(() => {});
+          if (docSnap.ref && typeof docSnap.ref.update === "function") {
+            docSnap.ref.update({ embedding: generated }).catch(() => {});
+          }
         }
       } catch {
         // Non-blocking fallback
@@ -760,7 +807,8 @@ app.post("/api/journal/semantic-search", verifyAuth, async (req, res) => {
       return res.status(400).json({ error: "Input validation error: Search query exceeds 500 characters." });
     }
 
-    const results = await semanticSearchUserEntries(userId, query, 12);
+    const incomingEntries = Array.isArray(data.entries) ? data.entries : undefined;
+    const results = await semanticSearchUserEntries(userId, query, 12, incomingEntries);
 
     return res.json({
       success: true,
@@ -808,7 +856,8 @@ app.post("/api/journal/ask", verifyAuth, async (req, res) => {
     }
 
     // Retrieve top relevant user entries
-    const retrievedEntries = await semanticSearchUserEntries(userId, question, 5);
+    const incomingEntries = Array.isArray(data.entries) ? data.entries : undefined;
+    const retrievedEntries = await semanticSearchUserEntries(userId, question, 5, incomingEntries);
 
     if (retrievedEntries.length === 0) {
       return res.json({
@@ -898,11 +947,63 @@ app.post("/api/analytics/insights", verifyAuth, async (req, res) => {
       return res.status(401).json({ error: "Unauthorized: User ID could not be identified." });
     }
 
-    const db = getAdminDb();
-    const interactionsRef = db.collection("users").doc(userId).collection("interactions");
-    const snapshot = await interactionsRef.orderBy("createdAt", "desc").limit(25).get();
+    const data = (req.body && typeof req.body === "object") ? req.body : {};
+    let entriesSummary: any[] = [];
+    const goalsData: any[] = [];
 
-    if (snapshot.empty) {
+    // 1. Process entries (prefer client-supplied decrypted entries, fallback to server Firestore)
+    if (Array.isArray(data.entries) && data.entries.length > 0) {
+      entriesSummary = data.entries.slice(0, 25).map((e: any, index: number) => {
+        const title = typeof e.title === "string" ? e.title.slice(0, 100) : "Untitled";
+        const prompt = typeof e.prompt === "string" ? e.prompt : "";
+        const response = typeof e.response === "string" ? e.response : "";
+        const dateStr = e.createdAt
+          ? new Date(e.createdAt).toLocaleDateString("en-US", {
+              month: "short",
+              day: "numeric",
+              year: "numeric",
+            })
+          : "Recent";
+        return {
+          index: index + 1,
+          id: typeof e.id === "string" ? e.id : `entry_${index}`,
+          title,
+          date: dateStr,
+          mode: typeof e.mode === "string" ? e.mode : "reflection",
+          promptSnippet: prompt.slice(0, 350),
+          responseSnippet: response.slice(0, 250),
+        };
+      });
+    } else {
+      try {
+        const db = getAdminDb();
+        const interactionsRef = db.collection("users").doc(userId).collection("interactions");
+        const snapshot = await interactionsRef.orderBy("createdAt", "desc").limit(25).get();
+        if (!snapshot.empty) {
+          entriesSummary = snapshot.docs.map((docSnap, index) => {
+            const docData = docSnap.data();
+            const dateStr = new Date(docData.createdAt || Date.now()).toLocaleDateString("en-US", {
+              month: "short",
+              day: "numeric",
+              year: "numeric",
+            });
+            return {
+              index: index + 1,
+              id: docSnap.id,
+              title: docData.title || "Untitled",
+              date: dateStr,
+              mode: docData.mode || "reflection",
+              promptSnippet: (docData.prompt || "").slice(0, 350),
+              responseSnippet: (docData.response || "").slice(0, 250),
+            };
+          });
+        }
+      } catch (adminErr: any) {
+        console.warn("Notice: Firestore fallback query in /api/analytics/insights:", adminErr?.message || adminErr);
+      }
+    }
+
+    if (entriesSummary.length === 0) {
       return res.json({
         success: true,
         empty: true,
@@ -913,38 +1014,36 @@ app.post("/api/analytics/insights", verifyAuth, async (req, res) => {
       });
     }
 
-    // Fetch user goals and durable memories for enriched context
-    const goalsRef = db.collection("users").doc(userId).collection("goals");
-    const goalsSnap = await goalsRef.limit(20).get();
-    const goalsData: any[] = [];
-    goalsSnap.forEach((doc) => {
-      const d = doc.data();
-      goalsData.push({
-        title: d.title || "",
-        status: d.status || "active",
-        category: d.category || "general",
-        completedTasks: Array.isArray(d.tasks) ? d.tasks.filter((t: any) => t.completed).length : 0,
-        totalTasks: Array.isArray(d.tasks) ? d.tasks.length : 0,
+    // 2. Process goals (prefer client-supplied goals, fallback to server Firestore)
+    if (Array.isArray(data.goals) && data.goals.length > 0) {
+      data.goals.slice(0, 20).forEach((g: any) => {
+        goalsData.push({
+          title: typeof g.title === "string" ? g.title : "",
+          status: typeof g.status === "string" ? g.status : "active",
+          category: typeof g.category === "string" ? g.category : "general",
+          completedTasks: typeof g.completedTasks === "number" ? g.completedTasks : 0,
+          totalTasks: typeof g.totalTasks === "number" ? g.totalTasks : 0,
+        });
       });
-    });
-
-    const entriesSummary = snapshot.docs.map((docSnap, index) => {
-      const data = docSnap.data();
-      const dateStr = new Date(data.createdAt || Date.now()).toLocaleDateString("en-US", {
-        month: "short",
-        day: "numeric",
-        year: "numeric",
-      });
-      return {
-        index: index + 1,
-        id: docSnap.id,
-        title: data.title || "Untitled",
-        date: dateStr,
-        mode: data.mode || "reflection",
-        promptSnippet: (data.prompt || "").slice(0, 350),
-        responseSnippet: (data.response || "").slice(0, 250),
-      };
-    });
+    } else {
+      try {
+        const db = getAdminDb();
+        const goalsRef = db.collection("users").doc(userId).collection("goals");
+        const goalsSnap = await goalsRef.limit(20).get();
+        goalsSnap.forEach((doc) => {
+          const d = doc.data();
+          goalsData.push({
+            title: d.title || "",
+            status: d.status || "active",
+            category: d.category || "general",
+            completedTasks: Array.isArray(d.tasks) ? d.tasks.filter((t: any) => t.completed).length : 0,
+            totalTasks: Array.isArray(d.tasks) ? d.tasks.length : 0,
+          });
+        });
+      } catch (goalsErr: any) {
+        console.warn("Notice: Firestore goals fallback query in /api/analytics/insights:", goalsErr?.message || goalsErr);
+      }
+    }
 
     const systemInstruction = `You are the "Personal Growth Analytics Engine" for a reflective personal journal.
 Analyze the user's journal entries and goals to extract patterns, progress, recurring themes, and accomplishments.
@@ -1114,17 +1213,62 @@ app.post("/api/analytics/weekly-review", verifyAuth, async (req, res) => {
     const weekEnd = typeof data.weekEndTimestamp === "number" ? data.weekEndTimestamp : Date.now();
     const weekLabel = typeof data.weekLabel === "string" ? data.weekLabel.trim() : "Current Week";
 
-    const db = getAdminDb();
-    const interactionsRef = db.collection("users").doc(userId).collection("interactions");
-    
-    // Fetch entries strictly within the requested week
-    const snapshot = await interactionsRef
-      .where("createdAt", ">=", weekStart)
-      .where("createdAt", "<=", weekEnd)
-      .orderBy("createdAt", "asc")
-      .get();
+    let weekEntries: any[] = [];
 
-    if (snapshot.empty) {
+    if (Array.isArray(data.entries) && data.entries.length > 0) {
+      weekEntries = data.entries.map((e: any, idx: number) => {
+        const dateStr = e.createdAt
+          ? new Date(e.createdAt).toLocaleDateString("en-US", {
+              weekday: "short",
+              month: "short",
+              day: "numeric",
+            })
+          : "During week";
+        return {
+          index: idx + 1,
+          id: typeof e.id === "string" ? e.id : `entry_${idx}`,
+          title: typeof e.title === "string" ? e.title : "Reflection",
+          date: dateStr,
+          prompt: (typeof e.prompt === "string" ? e.prompt : "").slice(0, 800),
+          response: (typeof e.response === "string" ? e.response : "").slice(0, 400),
+        };
+      });
+    } else {
+      try {
+        const db = getAdminDb();
+        const interactionsRef = db.collection("users").doc(userId).collection("interactions");
+        
+        // Fetch entries strictly within the requested week
+        const snapshot = await interactionsRef
+          .where("createdAt", ">=", weekStart)
+          .where("createdAt", "<=", weekEnd)
+          .orderBy("createdAt", "asc")
+          .get();
+
+        if (!snapshot.empty) {
+          weekEntries = snapshot.docs.map((d, idx) => {
+            const dat = d.data();
+            const dateStr = new Date(dat.createdAt).toLocaleDateString("en-US", {
+              weekday: "short",
+              month: "short",
+              day: "numeric",
+            });
+            return {
+              index: idx + 1,
+              id: d.id,
+              title: dat.title || "Reflection",
+              date: dateStr,
+              prompt: (dat.prompt || "").slice(0, 800),
+              response: (dat.response || "").slice(0, 400),
+            };
+          });
+        }
+      } catch (err: any) {
+        console.warn("Notice: Firestore query in /api/analytics/weekly-review fallback:", err?.message || err);
+      }
+    }
+
+    if (weekEntries.length === 0) {
       return res.json({
         success: true,
         empty: true,
@@ -1135,23 +1279,6 @@ app.post("/api/analytics/weekly-review", verifyAuth, async (req, res) => {
         message: `No journal entries were recorded during ${weekLabel}. Write entries throughout your week to generate comprehensive weekly reviews!`,
       });
     }
-
-    const weekEntries = snapshot.docs.map((d, idx) => {
-      const dat = d.data();
-      const dateStr = new Date(dat.createdAt).toLocaleDateString("en-US", {
-        weekday: "short",
-        month: "short",
-        day: "numeric",
-      });
-      return {
-        index: idx + 1,
-        id: d.id,
-        title: dat.title || "Reflection",
-        date: dateStr,
-        prompt: (dat.prompt || "").slice(0, 800),
-        response: (dat.response || "").slice(0, 400),
-      };
-    });
 
     const systemInstruction = `You are a thoughtful, grounded "Weekly Reflection Reviewer" for a personal journal.
 Your task is to summarize the user's journal entries from this specific week.
@@ -1238,8 +1365,9 @@ Generate the weekly review JSON:`;
 
     // Save review record to Firestore for persistent history
     try {
+      const adminDb = getAdminDb();
       const reviewDocId = `review_${weekStart}_${weekEnd}`;
-      await db.collection("users").doc(userId).collection("weekly_reviews").doc(reviewDocId).set(reviewData, { merge: true });
+      await adminDb.collection("users").doc(userId).collection("weekly_reviews").doc(reviewDocId).set(reviewData, { merge: true });
     } catch (saveErr) {
       console.warn("Could not persist weekly review to Firestore (continuing response):", saveErr);
     }
@@ -1364,48 +1492,95 @@ app.post("/api/goals/generate-plan", verifyAuth, async (req, res) => {
     const sourceEntryText = typeof data.sourceEntryText === "string" ? data.sourceEntryText.trim() : "";
     const sourceEntryTitle = typeof data.sourceEntryTitle === "string" ? data.sourceEntryTitle.trim() : "";
 
-    const db = getAdminDb();
+    let recentEntries: Array<{
+      id: string;
+      title: string;
+      prompt: string;
+      response: string;
+    }> = [];
+    const memoriesData: string[] = [];
+    const existingGoalsData: string[] = [];
 
     // 1. Retrieve user's recent journal reflections (up to 12 entries)
-    const interactionsRef = db.collection("users").doc(userId).collection("interactions");
-    const snapshot = await interactionsRef.orderBy("createdAt", "desc").limit(12).get();
-    const recentEntries = snapshot.docs.map((d) => {
-      const entry = d.data();
-      return {
-        id: d.id,
-        title: entry.title || "Reflection",
-        prompt: (entry.prompt || "").slice(0, 400),
-        response: (entry.response || "").slice(0, 300),
-      };
-    });
+    if (Array.isArray(data.recentEntries) && data.recentEntries.length > 0) {
+      recentEntries = data.recentEntries.slice(0, 12).map((e: any, idx: number) => ({
+        id: typeof e.id === "string" ? e.id : `entry_${idx}`,
+        title: typeof e.title === "string" ? e.title : "Reflection",
+        prompt: (typeof e.prompt === "string" ? e.prompt : "").slice(0, 400),
+        response: (typeof e.response === "string" ? e.response : "").slice(0, 300),
+      }));
+    } else {
+      try {
+        const db = getAdminDb();
+        const interactionsRef = db.collection("users").doc(userId).collection("interactions");
+        const snapshot = await interactionsRef.orderBy("createdAt", "desc").limit(12).get();
+        if (!snapshot.empty) {
+          recentEntries = snapshot.docs.map((d) => {
+            const entry = d.data();
+            return {
+              id: d.id,
+              title: entry.title || "Reflection",
+              prompt: (entry.prompt || "").slice(0, 400),
+              response: (entry.response || "").slice(0, 300),
+            };
+          });
+        }
+      } catch (interactionsErr: any) {
+        console.warn("Notice: Firestore interactions fallback in /api/goals/generate-plan:", interactionsErr?.message || interactionsErr);
+      }
+    }
 
     // 2. Retrieve user's active long-term memories
-    const memoriesRef = db.collection("users").doc(userId).collection("memories");
-    const memSnap = await memoriesRef.limit(15).get();
-    const memoriesData: string[] = [];
-    memSnap.forEach((doc) => {
-      const m = doc.data();
-      if (m.content) {
-        memoriesData.push(`[${m.category || "memory"}]: ${m.content}`);
+    if (Array.isArray(data.memories) && data.memories.length > 0) {
+      data.memories.slice(0, 15).forEach((m: any) => {
+        if (m.content) {
+          memoriesData.push(`[${m.category || "memory"}]: ${m.content}`);
+        }
+      });
+    } else {
+      try {
+        const db = getAdminDb();
+        const memoriesRef = db.collection("users").doc(userId).collection("memories");
+        const memSnap = await memoriesRef.limit(15).get();
+        memSnap.forEach((doc) => {
+          const m = doc.data();
+          if (m.content) {
+            memoriesData.push(`[${m.category || "memory"}]: ${m.content}`);
+          }
+        });
+      } catch (memErr: any) {
+        console.warn("Notice: Firestore memories fallback in /api/goals/generate-plan:", memErr?.message || memErr);
       }
-    });
+    }
 
     // 3. Retrieve user's existing goals to avoid redundancy
-    const goalsRef = db.collection("users").doc(userId).collection("goals");
-    const goalsSnap = await goalsRef.limit(15).get();
-    const existingGoalsData: string[] = [];
-    goalsSnap.forEach((doc) => {
-      const g = doc.data();
-      if (g.title) {
-        existingGoalsData.push(`- "${g.title}" (Status: ${g.status || "active"})`);
+    if (Array.isArray(data.existingGoals) && data.existingGoals.length > 0) {
+      data.existingGoals.slice(0, 15).forEach((g: any) => {
+        if (g.title) {
+          existingGoalsData.push(`- "${g.title}" (Status: ${g.status || "active"})`);
+        }
+      });
+    } else {
+      try {
+        const db = getAdminDb();
+        const goalsRef = db.collection("users").doc(userId).collection("goals");
+        const goalsSnap = await goalsRef.limit(15).get();
+        goalsSnap.forEach((doc) => {
+          const g = doc.data();
+          if (g.title) {
+            existingGoalsData.push(`- "${g.title}" (Status: ${g.status || "active"})`);
+          }
+        });
+      } catch (goalsErr: any) {
+        console.warn("Notice: Firestore goals fallback in /api/goals/generate-plan:", goalsErr?.message || goalsErr);
       }
-    });
+    }
 
     // 4. If a specific goal topic or prompt was given, run semantic search for extra relevance
     let semanticContext = "";
     if (rawGoalPrompt.length > 5) {
       try {
-        const searchResults = await semanticSearchUserEntries(userId, rawGoalPrompt, 3);
+        const searchResults = await semanticSearchUserEntries(userId, rawGoalPrompt, 3, recentEntries);
         if (searchResults.length > 0) {
           semanticContext = `\nTop Semantically Relevant Journal Excerpts:\n${searchResults
             .map((s, idx) => `[Relevance ${idx + 1}] "${s.title}": ${s.excerpt}`)

@@ -1,0 +1,82 @@
+{
+  "entities": {
+    "users": {
+      "title": "User Profile",
+      "description": "User profile metadata",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string" },
+        "displayName": { "type": "string" },
+        "photoURL": { "type": "string" },
+        "createdAt": { "type": "number" },
+        "lastLoginAt": { "type": "number" }
+      },
+      "required": ["uid"]
+    },
+    "interactions": {
+      "title": "Journal Interaction",
+      "description": "Owner-bound journal reflections with client-side encryption support",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "title": { "type": "string" },
+        "prompt": { "type": "string" },
+        "response": { "type": "string" },
+        "mode": { "type": "string" },
+        "createdAt": { "type": "number" },
+        "updatedAt": { "type": "number" },
+        "isEncrypted": { "type": "boolean" },
+        "encryptedPayload": { "type": "object" },
+        "location": { "type": "object" },
+        "turns": { "type": "array" }
+      },
+      "required": ["userId", "title", "createdAt"]
+    },
+    "memories": {
+      "title": "User Memory",
+      "description": "Durable extracted user memories",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "category": { "type": "string" },
+        "content": { "type": "string" },
+        "createdAt": { "type": "number" },
+        "updatedAt": { "type": "number" }
+      },
+      "required": ["userId", "category", "content", "createdAt"]
+    },
+    "goals": {
+      "title": "Personal Goal",
+      "description": "Personal goals and actionable tasks",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "title": { "type": "string" },
+        "category": { "type": "string" },
+        "status": { "type": "string" },
+        "tasks": { "type": "array" },
+        "milestones": { "type": "array" },
+        "createdAt": { "type": "number" }
+      },
+      "required": ["userId", "title", "status", "createdAt"]
+    },
+    "weekly_reviews": {
+      "title": "Weekly Review",
+      "description": "Synthesized weekly reflection summaries",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "weekLabel": { "type": "string" },
+        "weekStart": { "type": "number" },
+        "weekEnd": { "type": "number" },
+        "createdAt": { "type": "number" }
+      },
+      "required": ["userId", "weekLabel", "createdAt"]
+    }
+  },
+  "firestoreRules": {
+    "version": "2",
+    "description": "Strict owner-bound isolation on all user subcollections"
+  }
+}

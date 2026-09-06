@@ -38,6 +38,7 @@ import {
 } from 'firebase/firestore';
 import { db, getCurrentUserIdToken } from '../lib/firebase';
 import { sanitizePayload } from '../lib/sanitize';
+import { decryptJournalEntries } from '../lib/encryption';
 import type {
   UserProfile,
   GoalItem,
@@ -214,7 +215,8 @@ export const GoalsView: React.FC<GoalsViewProps> = ({
         snap.forEach((d) => {
           entries.push({ id: d.id, ...d.data() } as JournalInteraction);
         });
-        setRecentEntries(entries.slice(0, 15));
+        const decrypted = await decryptJournalEntries(entries.slice(0, 15), user);
+        setRecentEntries(decrypted);
       } catch (e) {
         console.warn('Could not load recent interactions for context selector:', e);
       }
@@ -321,6 +323,16 @@ export const GoalsView: React.FC<GoalsViewProps> = ({
         sourceEntryId: selectedEntryId || undefined,
         sourceEntryText: sourceText || undefined,
         sourceEntryTitle: sourceTitle || undefined,
+        recentEntries: recentEntries.slice(0, 12).map((e) => ({
+          id: e.id,
+          title: e.title || 'Reflection',
+          prompt: e.prompt || '',
+          response: e.response || '',
+        })),
+        existingGoals: goals.slice(0, 15).map((g) => ({
+          title: g.title,
+          status: g.status,
+        })),
       };
 
       const response = await fetch('/api/goals/generate-plan', {

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Search,
   Sparkles,
@@ -12,8 +12,10 @@ import {
   CheckCircle2,
   RefreshCw
 } from 'lucide-react';
-import type { UserProfile, SemanticSearchResult, AskJournalResponse, JournalMode } from '../types';
-import { getCurrentUserIdToken } from '../lib/firebase';
+import { collection, query, orderBy, onSnapshot } from 'firebase/firestore';
+import type { UserProfile, SemanticSearchResult, AskJournalResponse, JournalMode, JournalInteraction } from '../types';
+import { getCurrentUserIdToken, db } from '../lib/firebase';
+import { decryptJournalEntries } from '../lib/encryption';
 
 interface SemanticSearchViewProps {
   user: UserProfile;
@@ -54,6 +56,32 @@ export const SemanticSearchView: React.FC<SemanticSearchViewProps> = ({
   const [askResponse, setAskResponse] = useState<AskJournalResponse | null>(null);
   const [lastQuestion, setLastQuestion] = useState('');
 
+  // Decrypted interactions for semantic search context
+  const [interactions, setInteractions] = useState<JournalInteraction[]>([]);
+
+  useEffect(() => {
+    if (!user?.uid) return;
+    const q = query(
+      collection(db, 'users', user.uid, 'interactions'),
+      orderBy('createdAt', 'desc')
+    );
+    const unsubscribe = onSnapshot(
+      q,
+      async (snapshot) => {
+        const rawItems = snapshot.docs.map((d) => ({
+          id: d.id,
+          ...d.data(),
+        })) as JournalInteraction[];
+        const decrypted = await decryptJournalEntries(rawItems, user);
+        setInteractions(decrypted);
+      },
+      (err) => {
+        console.warn('Semantic search interactions fetch notice:', err);
+      }
+    );
+    return () => unsubscribe();
+  }, [user?.uid]);
+
   const executeSearch = async (targetQuery?: string) => {
     const textToSearch = (targetQuery !== undefined ? targetQuery : query).trim();
     if (!textToSearch) {
@@ -71,6 +99,15 @@ export const SemanticSearchView: React.FC<SemanticSearchViewProps> = ({
         throw new Error('Authentication session expired. Please refresh the page and sign in again.');
       }
 
+      const candidateEntries = interactions.slice(0, 50).map((e) => ({
+        id: e.id,
+        title: e.title,
+        prompt: e.prompt,
+        response: e.response,
+        createdAt: e.createdAt,
+        mode: e.mode,
+      }));
+
       if (searchMode === 'search') {
         const res = await fetch('/api/journal/semantic-search', {
           method: 'POST',
@@ -78,7 +115,10 @@ export const SemanticSearchView: React.FC<SemanticSearchViewProps> = ({
             'Content-Type': 'application/json',
             Authorization: `Bearer ${idToken}`,
           },
-          body: JSON.stringify({ query: textToSearch }),
+          body: JSON.stringify({
+            query: textToSearch,
+            entries: candidateEntries,
+          }),
         });
 
         const data = await res.json();
@@ -96,7 +136,10 @@ export const SemanticSearchView: React.FC<SemanticSearchViewProps> = ({
             'Content-Type': 'application/json',
             Authorization: `Bearer ${idToken}`,
           },
-          body: JSON.stringify({ question: textToSearch }),
+          body: JSON.stringify({
+            question: textToSearch,
+            entries: candidateEntries,
+          }),
         });
 
         const data = await res.json();

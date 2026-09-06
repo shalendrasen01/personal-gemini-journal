@@ -17,6 +17,7 @@ import {
   EyeOff,
   UserCheck,
   FileCode2,
+  AlertCircle,
 } from 'lucide-react';
 import type { UserProfile } from '../types';
 
@@ -131,13 +132,23 @@ export const SecurityCenterView: React.FC<SecurityCenterViewProps> = ({ user }) 
       protectsAgainst: 'Indirect prompt injection, jailbreak attempts, system instruction bypass, AI behavior hijacking, and rogue tool invocation.',
       technicalVerification: 'System instructions define strict boundaries. Content is structured in isolated fields; untrusted strings are sanitized.',
     },
+    {
+      id: 'client-encryption',
+      name: 'Client-Side Zero-Knowledge Encryption',
+      status: 'Enforced',
+      badgeColor: 'bg-emerald-50 text-emerald-800 border-emerald-200',
+      icon: Lock,
+      explanation: 'Journal entries are encrypted in the browser with WebCrypto AES-256-GCM before writing to Firestore, and decrypted only client-side after fetch.',
+      protectsAgainst: 'Cloud Firestore database breaches, rogue cloud infrastructure admins, third-party database exfiltration, and unencrypted database backups.',
+      technicalVerification: 'WebCrypto crypto.subtle.encrypt(AES-GCM, 256-bit key, 12-byte IV, 128-bit tag). Key derived via PBKDF2 (SHA-256, 100k iterations) bound to user session.',
+    },
   ];
 
   const filteredControls = securityControls.filter((control) => {
     if (activeCategoryFilter === 'all') return true;
     if (activeCategoryFilter === 'auth') return control.id.includes('auth') || control.id === 'token-verification';
     if (activeCategoryFilter === 'backend') return control.id === 'token-verification' || control.id === 'https-cloud-run' || control.id === 'secret-manager';
-    if (activeCategoryFilter === 'data') return control.id === 'firestore-rules' || control.id === 'user-isolation';
+    if (activeCategoryFilter === 'data') return control.id === 'firestore-rules' || control.id === 'user-isolation' || control.id === 'client-encryption';
     if (activeCategoryFilter === 'ai') return control.id === 'server-gemini' || control.id === 'prompt-injection';
     return true;
   });
@@ -291,7 +302,7 @@ export const SecurityCenterView: React.FC<SecurityCenterViewProps> = ({ user }) 
           {/* Category Filter Pills */}
           <div className="inline-flex p-1 bg-[#edeae1] rounded border border-[#e0ddd5] flex-wrap">
             {[
-              { key: 'all', label: 'All Controls (9)' },
+              { key: 'all', label: `All Controls (${securityControls.length})` },
               { key: 'auth', label: 'Auth & Identity' },
               { key: 'backend', label: 'Backend & Cloud' },
               { key: 'data', label: 'Data & Firestore' },
@@ -470,7 +481,123 @@ export const SecurityCenterView: React.FC<SecurityCenterViewProps> = ({ user }) 
         </div>
       </section>
 
-      {/* 5. Audit Transparency & Compliance Footer */}
+      {/* 5. Client-Side Encryption Threat Model Deep Dive */}
+      <section className="space-y-4">
+        <div className="flex items-center justify-between border-b border-[#e0ddd5] pb-3">
+          <div className="flex items-center gap-2">
+            <Lock className="w-4 h-4 text-[#4a5d4e]" />
+            <h2 className="font-serif text-xl text-[#1a1a1a]">
+              Client-Side Encryption Architecture & Threat Model
+            </h2>
+          </div>
+          <span className="text-[10px] font-mono uppercase bg-[#4a5d4e]/10 text-[#4a5d4e] px-2.5 py-1 rounded-full font-semibold border border-[#4a5d4e]/20">
+            WebCrypto AES-256-GCM
+          </span>
+        </div>
+
+        {/* Cryptographic Parameters Grid */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <div className="p-3 bg-white border border-[#e0ddd5] rounded">
+            <span className="text-[10px] uppercase tracking-wider text-[#8e8a82] font-semibold block">Cipher Suite</span>
+            <span className="font-mono text-xs text-[#1a1a1a] font-bold">AES-256-GCM</span>
+            <span className="text-[10px] text-[#5a5751] block mt-0.5">Authenticated Encryption</span>
+          </div>
+          <div className="p-3 bg-white border border-[#e0ddd5] rounded">
+            <span className="text-[10px] uppercase tracking-wider text-[#8e8a82] font-semibold block">Key Derivation</span>
+            <span className="font-mono text-xs text-[#1a1a1a] font-bold">PBKDF2 SHA-256</span>
+            <span className="text-[10px] text-[#5a5751] block mt-0.5">100,000 Iterations</span>
+          </div>
+          <div className="p-3 bg-white border border-[#e0ddd5] rounded">
+            <span className="text-[10px] uppercase tracking-wider text-[#8e8a82] font-semibold block">Init Vector (IV)</span>
+            <span className="font-mono text-xs text-[#1a1a1a] font-bold">96-bit Random</span>
+            <span className="text-[10px] text-[#5a5751] block mt-0.5">Fresh per document write</span>
+          </div>
+          <div className="p-3 bg-white border border-[#e0ddd5] rounded">
+            <span className="text-[10px] uppercase tracking-wider text-[#8e8a82] font-semibold block">Auth Integrity</span>
+            <span className="font-mono text-xs text-[#1a1a1a] font-bold">128-bit Tag</span>
+            <span className="text-[10px] text-[#5a5751] block mt-0.5">Tamper-evident verification</span>
+          </div>
+        </div>
+
+        {/* Threat Model Comparison: What it DOES vs DOES NOT Cover */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          {/* Covered Threats */}
+          <div className="p-5 bg-emerald-50/50 border border-emerald-200 rounded space-y-3">
+            <div className="flex items-center gap-2 text-emerald-900 font-semibold text-sm">
+              <CheckCircle2 className="w-4 h-4 text-emerald-700 shrink-0" />
+              <span>What Client-Side Encryption Protects Against</span>
+            </div>
+            <ul className="space-y-2.5 text-xs text-emerald-950">
+              <li className="flex items-start gap-2">
+                <span className="font-bold text-emerald-700 shrink-0">•</span>
+                <div>
+                  <strong className="font-semibold text-emerald-900">Cloud Firestore Database Breaches:</strong> Even if raw database files, Firestore collections, or bucket backups are compromised or exfiltrated, attackers only obtain encrypted ciphertext envelopes.
+                </div>
+              </li>
+              <li className="flex items-start gap-2">
+                <span className="font-bold text-emerald-700 shrink-0">•</span>
+                <div>
+                  <strong className="font-semibold text-emerald-900">Rogue Infrastructure Administrators:</strong> Database operators, cloud platform staff, or service accounts with Firestore Viewer roles cannot read journal text, prompts, or reflections.
+                </div>
+              </li>
+              <li className="flex items-start gap-2">
+                <span className="font-bold text-emerald-700 shrink-0">•</span>
+                <div>
+                  <strong className="font-semibold text-emerald-900">Third-Party Data Exfiltration:</strong> Any unauthorized server-side script or raw database snapshot lacks the client-side master key and cannot decipher user content.
+                </div>
+              </li>
+              <li className="flex items-start gap-2">
+                <span className="font-bold text-emerald-700 shrink-0">•</span>
+                <div>
+                  <strong className="font-semibold text-emerald-900">Ciphertext Tampering:</strong> The 128-bit AES-GCM authentication tag ensures that any unauthorized bit modification or data corruption triggers immediate decryption rejection.
+                </div>
+              </li>
+            </ul>
+          </div>
+
+          {/* Not Covered Threats (Residual Attack Vectors) */}
+          <div className="p-5 bg-amber-50/60 border border-amber-200 rounded space-y-3">
+            <div className="flex items-center gap-2 text-amber-900 font-semibold text-sm">
+              <AlertCircle className="w-4 h-4 text-amber-700 shrink-0" />
+              <span>What It Does NOT Protect Against (Residual Risks)</span>
+            </div>
+            <ul className="space-y-2.5 text-xs text-amber-950">
+              <li className="flex items-start gap-2">
+                <span className="font-bold text-amber-700 shrink-0">•</span>
+                <div>
+                  <strong className="font-semibold text-amber-900">Compromised Client Device / OS Malware:</strong> Keyloggers, rootkits, or memory-inspection trojans running on the user's local operating system can observe text before encryption.
+                </div>
+              </li>
+              <li className="flex items-start gap-2">
+                <span className="font-bold text-amber-700 shrink-0">•</span>
+                <div>
+                  <strong className="font-semibold text-amber-900">Malicious Browser Extensions:</strong> Third-party browser extensions granted broad DOM or storage read permissions can inspect decrypted text rendered in the active browser tab.
+                </div>
+              </li>
+              <li className="flex items-start gap-2">
+                <span className="font-bold text-amber-700 shrink-0">•</span>
+                <div>
+                  <strong className="font-semibold text-amber-900">Cross-Site Scripting (XSS):</strong> If malicious JavaScript executes within the application's client origin, it can intercept user input or invoke WebCrypto APIs directly.
+                </div>
+              </li>
+              <li className="flex items-start gap-2">
+                <span className="font-bold text-amber-700 shrink-0">•</span>
+                <div>
+                  <strong className="font-semibold text-amber-900">Physical Device Theft / Unlocked Sessions:</strong> Anyone with direct physical access to an unlocked, active browser window can view decrypted journal entries.
+                </div>
+              </li>
+              <li className="flex items-start gap-2">
+                <span className="font-bold text-amber-700 shrink-0">•</span>
+                <div>
+                  <strong className="font-semibold text-amber-900">Unencrypted Structural Metadata:</strong> Creation timestamps, mode classifications, and document identifiers remain unencrypted to support Firestore range querying and ordering.
+                </div>
+              </li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      {/* 6. Audit Transparency & Compliance Footer */}
       <section className="p-6 bg-[#edeae1]/60 border border-[#e0ddd5] rounded flex flex-col sm:flex-row sm:items-center justify-between gap-4 text-xs text-[#5a5751]">
         <div className="flex items-start gap-3">
           <Info className="w-4 h-4 text-[#4a5d4e] shrink-0 mt-0.5" />

@@ -7,19 +7,10 @@ import {
   type User
 } from 'firebase/auth';
 import { getFirestore, type Firestore } from 'firebase/firestore';
+import firebaseConfig from '../../firebase-applet-config.json';
 
-// Firebase configuration for Default Gemini Project
-
-const defaultFirebaseConfig = {
-  apiKey: "AIzaSyA_MbfHL2J0TtnfwmEFkYBbJrgO3iDk-B0",
-  authDomain: "gen-lang-client-0534033534.firebaseapp.com",
-  projectId: "gen-lang-client-0534033534",
-  storageBucket: "gen-lang-client-0534033534.firebasestorage.app",
-  messagingSenderId: "265003723115",
-  appId: "1:265003723115:web:d74dd480bdf3234795c42e",
-};
 const app = !getApps().length
-  ? initializeApp(defaultFirebaseConfig)
+  ? initializeApp(firebaseConfig)
   : getApp();
 
 export const auth = getAuth(app);
@@ -30,8 +21,8 @@ googleProvider.setCustomParameters({
   prompt: 'select_account'
 });
 
-// Cloud Firestore
-export const db: Firestore = getFirestore(app);
+// Cloud Firestore with explicit databaseId per Firebase Integration Skill
+export const db: Firestore = getFirestore(app, (firebaseConfig as any).firestoreDatabaseId || (firebaseConfig as any).databaseId || undefined);
 
 /**
  * Sign in using Google Federated Identity

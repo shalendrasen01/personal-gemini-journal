@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import { collection, onSnapshot, doc, getDoc } from 'firebase/firestore';
 import { auth, db, signInWithGoogle, logOut } from './lib/firebase';
+import { decryptJournalEntry, clearEncryptionSessionCache } from './lib/encryption';
 import type { UserProfile, JournalInteraction } from './types';
 import { Navbar } from './components/Navbar';
 import { LandingView } from './components/LandingView';
@@ -142,6 +143,9 @@ export default function App() {
 
   const handleLogout = async () => {
     try {
+      if (currentUser?.uid) {
+        clearEncryptionSessionCache(currentUser.uid);
+      }
       await logOut();
       setSelectedInteraction(null);
       setActiveTab('journal');
@@ -155,7 +159,9 @@ export default function App() {
     try {
       const docSnap = await getDoc(doc(db, 'users', currentUser.uid, 'interactions', interactionId));
       if (docSnap.exists()) {
-        setSelectedInteraction({ id: docSnap.id, ...docSnap.data() } as JournalInteraction);
+        const rawData = { id: docSnap.id, ...docSnap.data() } as JournalInteraction;
+        const decrypted = await decryptJournalEntry(rawData, currentUser);
+        setSelectedInteraction(decrypted);
         setActiveTab('journal');
       }
     } catch (err) {

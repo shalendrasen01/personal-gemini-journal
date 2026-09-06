@@ -49,6 +49,7 @@ import {
   getDocs,
 } from 'firebase/firestore';
 import { db, auth } from '../lib/firebase';
+import { decryptJournalEntries } from '../lib/encryption';
 import { sanitizePayload } from '../lib/sanitize';
 import type {
   UserProfile,
@@ -131,10 +132,17 @@ export const GrowthDashboardView: React.FC<GrowthDashboardViewProps> = ({
     const q = query(ref, orderBy('createdAt', 'desc'));
     const unsub = onSnapshot(
       q,
-      (snapshot) => {
+      async (snapshot) => {
         const items: JournalInteraction[] = [];
         snapshot.forEach((d) => items.push({ id: d.id, ...d.data() } as JournalInteraction));
-        setInteractions(items);
+        
+        let resolved = items;
+        try {
+          resolved = await decryptJournalEntries(items, user);
+        } catch (decryptErr) {
+          console.warn('Dashboard interactions decryption warning:', decryptErr);
+        }
+        setInteractions(resolved);
         setIsLoadingData(false);
       },
       (err) => {
@@ -344,6 +352,23 @@ export const GrowthDashboardView: React.FC<GrowthDashboardViewProps> = ({
           'Content-Type': 'application/json',
           Authorization: `Bearer ${idToken}`,
         },
+        body: JSON.stringify({
+          entries: interactions.slice(0, 25).map((e) => ({
+            id: e.id,
+            title: e.title || 'Untitled',
+            prompt: e.prompt || '',
+            response: e.response || '',
+            createdAt: e.createdAt,
+            mode: e.mode || 'reflection',
+          })),
+          goals: goals.slice(0, 20).map((g) => ({
+            title: g.title,
+            status: g.status,
+            category: g.category,
+            completedTasks: g.tasks?.filter((t) => t.completed).length || 0,
+            totalTasks: g.tasks?.length || 0,
+          })),
+        }),
       });
 
       const data = await res.json();
@@ -390,6 +415,19 @@ export const GrowthDashboardView: React.FC<GrowthDashboardViewProps> = ({
           weekStartTimestamp: currentWeekSpan.start,
           weekEndTimestamp: currentWeekSpan.end,
           weekLabel: `${currentWeekSpan.label} (${currentWeekSpan.formattedSpan})`,
+          entries: currentWeekSpan.entries.map((e) => ({
+            id: e.id,
+            title: e.title || 'Reflection',
+            prompt: e.prompt || '',
+            response: e.response || '',
+            createdAt: e.createdAt,
+            mode: e.mode || 'reflection',
+          })),
+          goals: goals.slice(0, 15).map((g) => ({
+            title: g.title,
+            status: g.status,
+            category: g.category,
+          })),
         }),
       });
 

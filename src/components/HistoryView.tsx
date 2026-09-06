@@ -6,10 +6,12 @@ import {
   AlertCircle, 
   Sparkles,
   BookOpen,
-  MapPin
+  MapPin,
+  Lock
 } from 'lucide-react';
 import type { JournalInteraction, JournalMode, UserProfile } from '../types';
 import { db } from '../lib/firebase';
+import { decryptJournalEntries } from '../lib/encryption';
 import { collection, query, orderBy, onSnapshot, doc, deleteDoc } from 'firebase/firestore';
 
 interface HistoryViewProps {
@@ -50,13 +52,22 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
 
     const unsubscribe = onSnapshot(
       q,
-      (snapshot) => {
+      async (snapshot) => {
         const items: JournalInteraction[] = [];
         snapshot.forEach((docSnapshot) => {
           items.push({ id: docSnapshot.id, ...docSnapshot.data() } as JournalInteraction);
         });
-        setInteractions(items);
-        setLoading(false);
+        
+        try {
+          // Decrypt client-side encrypted entries
+          const decrypted = await decryptJournalEntries(items, user);
+          setInteractions(decrypted);
+        } catch (decryptErr) {
+          console.warn('Error decrypting entries:', decryptErr);
+          setInteractions(items);
+        } finally {
+          setLoading(false);
+        }
       },
       (error) => {
         console.error('Error fetching interactions:', error);
@@ -221,6 +232,15 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
                         <span className="inline-flex items-center gap-1 text-[10px] text-[#4a5d4e] bg-[#f8f6f0] border border-[#c8ddcb] px-1.5 py-0.5 rounded">
                           <MapPin className="w-2.5 h-2.5" />
                           <span className="line-clamp-1 max-w-[120px] sm:max-w-[200px]">{item.location.name}</span>
+                        </span>
+                      </>
+                    )}
+                    {item.isEncrypted && (
+                      <>
+                        <span className="text-[#8e8a82]">•</span>
+                        <span className="inline-flex items-center gap-1 text-[10px] text-[#4a5d4e] bg-[#4a5d4e]/10 border border-[#4a5d4e]/20 px-1.5 py-0.5 rounded" title="Client-Side Encrypted with AES-256-GCM">
+                          <Lock className="w-2.5 h-2.5" />
+                          <span>Encrypted</span>
                         </span>
                       </>
                     )}

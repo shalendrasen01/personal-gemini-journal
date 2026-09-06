@@ -17,11 +17,13 @@ import {
   Mic,
   Target,
   MapPin,
-  X
+  X,
+  Lock
 } from 'lucide-react';
 import type { JournalInteraction, JournalMode, ChatTurn, UserProfile, GoalDetectionResult, EntryLocation } from '../types';
 import { getCurrentUserIdToken, db } from '../lib/firebase';
 import { sanitizePayload } from '../lib/sanitize';
+import { encryptJournalEntry } from '../lib/encryption';
 import { retrieveRelevantMemories, extractAndPersistMemories } from '../lib/memory';
 import { doc, setDoc } from 'firebase/firestore';
 import { VoiceJournalModal } from './VoiceJournalModal';
@@ -404,13 +406,19 @@ export const JournalWorkspace: React.FC<JournalWorkspaceProps> = ({
         location: location || undefined,
       };
 
-      const sanitizedData = sanitizePayload(rawInteractionData);
+      // Encrypt sensitive content client-side with WebCrypto AES-256-GCM before writing to Cloud Firestore
+      const encryptedData = await encryptJournalEntry(rawInteractionData, user);
+      const sanitizedData = sanitizePayload(encryptedData);
       const interactionDocRef = doc(db, 'users', user.uid, 'interactions', interactionDocId);
       await setDoc(interactionDocRef, sanitizedData, { merge: true });
 
       setCurrentId(interactionDocId);
       setHasUnsavedChanges(false);
-      onSavedInteraction(sanitizedData as JournalInteraction);
+      // Pass the unencrypted in-memory interaction to parent for instantaneous, fluid UI state
+      onSavedInteraction({
+        ...rawInteractionData,
+        isEncrypted: true,
+      } as JournalInteraction);
 
       // Background Memory Extraction: identify goals, skills, challenges, and preferences
       const fullEntryText = `${title}\n\n${entryText}\n\n${turns.map((t) => `${t.role}: ${t.content}`).join('\n')}`;
@@ -486,6 +494,12 @@ export const JournalWorkspace: React.FC<JournalWorkspaceProps> = ({
             <span className="hidden sm:inline-block text-xs text-[#8e8a82] ml-3 uppercase tracking-wider">
               • {wordCount} words
             </span>
+          </div>
+
+          {/* Client-Side Encryption Security Badge */}
+          <div className="hidden lg:flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[#4a5d4e]/10 text-[#4a5d4e] text-[11px] font-medium border border-[#4a5d4e]/20" title="Client-Side Zero-Knowledge Encryption: Content is encrypted with WebCrypto AES-256-GCM before writing to Firestore.">
+            <Lock className="w-3 h-3" />
+            <span>AES-256-GCM Encrypted</span>
           </div>
 
           {/* Location Badge or Add Location Trigger */}

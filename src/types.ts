@@ -37,6 +37,14 @@ export interface EntryLocation {
   timestamp?: number;
 }
 
+export interface EncryptedPayload {
+  ciphertext: string;
+  iv: string;
+  version: number;
+  tagLength?: number;
+  encryptedAt: number;
+}
+
 export interface JournalInteraction {
   id?: string;
   userId: string;
@@ -50,6 +58,9 @@ export interface JournalInteraction {
   updatedAt: number;
   modelUsed?: string;
   tags?: string[];
+  isEncrypted?: boolean;
+  encryptedPayload?: EncryptedPayload;
+  isDecryptionFailed?: boolean;
 }
 
 export interface UserProfile {
